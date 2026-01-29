@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>消了个消小游戏</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root { --bg-color: #c4ea80; }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            touch-action: none; /* 禁止默认触摸行为 */
+            -webkit-user-select: none;
+            user-select: none;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        
+        /* 游戏主容器，使用 Flex 布局 */
+        .game-wrapper { 
+            position: absolute;
+            inset: 0;
+            display: flex; 
+            flex-direction: column; 
+            background-color: var(--bg-color);
+            z-index: 1;
+        }
+
+        /* 游戏区域缩放容器 */
+        #game-stage-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* 实际的游戏盘面，会被 JS 缩放 */
+        #game-board {
+            width: 360px;
+            height: 460px;
+            position: relative;
+            /* border: 1px dashed rgba(0,0,0,0.1); For Debug */
+        }
+
+        .tile { 
+            transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
+            cursor: pointer; 
+            position: absolute; 
+            -webkit-tap-highlight-color: transparent;
+        }
+        .tile:active { transform: scale(0.95) translateY(2px); }
+        .blocked { filter: brightness(0.4) grayscale(0.9) contrast(0.8); cursor: not-allowed; pointer-events: none; }
+        
+        /* 底部安全区适配 */
+        .safe-pb { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+
+        #start-screen { position: fixed; inset: 0; background: linear-gradient(to bottom, #c4ea80, #a3d95d); z-index: 3000; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+
+        /* 倒水游戏样式 */
+        .tube { position: relative; width: 40px; height: 120px; border: 3px solid rgba(255,255,255,0.3); border-radius: 0 0 20px 20px; display: flex; flex-direction: column-reverse; overflow: hidden; background: rgba(255,255,255,0.05); cursor: pointer; transition: transform 0.3s; }
+        .tube.selected { transform: translateY(-10px); border-color: #fff; box-shadow: 0 0 15px rgba(255,255,255,0.5); }
+        .water-layer { width: 100%; height: 25%; border-top: 1px solid rgba(255,255,255,0.05); transition: height 0.3s; }
+        
+        /* 弹窗动画 */
+        .animate-pop-in { animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        @keyframes popIn {
+            0% { transform: scale(0.5) translateY(50px); opacity: 0; }
+            100% { transform: scale(1) translateY(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 开始界面 -->
+    <div id="start-screen">
+        <div class="text-6xl mb-8 animate-bounce">✨</div>
+        <h1 class="text-4xl font-black text-[#4d7c0f] mb-2">消了个消</h1>
+        <p class="text-[#4d7c0f]/60 mb-12 font-bold">地狱难度 · 谁能过第二关</p>
+        <button onclick="startGame()" class="bg-[#4d7c0f] text-white text-2xl font-bold px-12 py-5 rounded-3xl shadow-[0_10px_0_#365314] active:translate-y-2 active:shadow-none transition-all hover:scale-105 active:scale-95">
+            开始游戏
+        </button>
+    </div>
+
+    <!-- 游戏主界面 -->
+    <div id="main-app" class="game-wrapper">
+        <!-- 顶部栏 -->
+        <div class="pt-4 px-6 flex justify-between items-center z-10 shrink-0 h-16">
+            <div class="bg-white/80 backdrop-blur-md px-4 py-2 rounded-full shadow-sm font-black text-[#4d7c0f] flex items-center gap-2">
+                <span class="w-2 h-2 bg-red-500 rounded-full animate-ping"></span>
+                消消乐 · 第一关
+            </div>
+            <button onclick="toggleFullscreen()" class="bg-white/80 p-2 rounded-full shadow-sm active:scale-90 transition-transform">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+            </button>
+        </div>
+
+        <!-- 游戏棋盘区域 (自适应缩放) -->
+        <div id="game-stage-container">
+            <div id="game-board">
+                <!-- 棋子将在这里生成 -->
+            </div>
+        </div>
+
+        <!-- 底部控制栏 -->
+        <div class="safe-pb px-4 shrink-0 w-full flex flex-col items-center">
+            <!-- 道具按钮 -->
+            <div class="flex justify-center items-end gap-6 mb-3">
+                <div onclick="startAdGame('shuffle')" class="flex flex-col items-center gap-1 active:scale-95 transition-transform">
+                    <div class="w-11 h-11 bg-blue-500 rounded-2xl flex items-center justify-center text-white shadow-[0_4px_0_#1d4ed8]">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M21 21v-5h-5"/></svg>
+                    </div>
+                    <span class="text-[10px] font-bold text-[#4d7c0f]">洗牌</span>
+                </div>
+                <div onclick="startAdGame('remove')" class="flex flex-col items-center gap-1 active:scale-95 transition-transform">
+                    <div class="w-14 h-14 bg-red-600 rounded-2xl flex items-center justify-center text-white shadow-[0_5px_0_#991b1b]">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M5 3l14 9-14 9V3z"/></svg>
+                    </div>
+                    <span class="text-[10px] font-bold text-red-800 bg-white/60 px-2 rounded-full">移出</span>
+                </div>
+                <div onclick="shareGame()" class="flex flex-col items-center gap-1 active:scale-95 transition-transform">
+                    <div class="w-11 h-11 bg-green-600 rounded-2xl flex items-center justify-center text-white shadow-[0_4px_0_#14532d]">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                    </div>
+                    <span class="text-[10px] font-bold text-[#4d7c0f]">分享</span>
+                </div>
+            </div>
+
+            <!-- 卡槽区域：调整宽度以容纳7个 -->
+            <div class="bg-[#4a2e12] p-2 rounded-[20px] shadow-2xl border-b-4 border-[#301d0a] w-full max-w-[360px]">
+                <div id="dock" class="bg-[#5c3c1d] h-14 rounded-lg flex items-center justify-start px-1 gap-1 shadow-inner overflow-hidden">
+                    <!-- 卡槽内容 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗层 -->
+    <div id="modal-overlay" class="fixed inset-0 bg-black/80 z-[4000] hidden flex items-center justify-center p-6">
+        <div id="modal-content" class="bg-white rounded-[40px] p-8 w-full max-w-xs text-center shadow-2xl animate-pop-in"></div>
+    </div>
+
+    <!-- 广告/小游戏层 -->
+    <div id="ad-layer" class="fixed inset-0 z-[5000] bg-[#0f172a] hidden flex flex-col items-center justify-center">
+        <div class="absolute top-0 w-full p-6 flex justify-between items-center text-white safe-pt">
+            <div class="flex items-center gap-2">
+                <div class="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center text-xs">💧</div>
+                <span class="font-bold">广告 (30s)</span>
+            </div>
+            <div id="ad-timer" class="bg-red-600 text-white px-4 py-1 rounded-full font-black text-sm border-2 border-white/20">30s</div>
+        </div>
+        <div id="water-game-container" class="flex flex-wrap justify-center gap-4 px-4 w-full max-w-md"></div>
+        <div class="mt-12 text-center">
+            <p id="ad-status" class="text-white font-bold mb-2">挑战中：分类所有液体以准备领取奖励</p>
+        </div>
+        <button id="click_btn" onclick="sound.play('click')" class="absolute bottom-10 right-10 bg-gradient-to-r from-yellow-400 to-orange-500 text-black px-6 py-4 rounded-2xl font-black text-sm shadow-xl animate-pulse">
+            点击即玩 ▶
+        </button>
+
+<div id="water-win-toast"
+     class="hidden mt-4 px-6 py-3 bg-green-500 text-white font-black rounded-full shadow-lg animate-pop-in">
+    🎉 恭喜通关！奖励已锁定
+</div>
+
+        <div id="ad-cta" class="hidden absolute inset-0 bg-black/95 flex flex-col items-center justify-center p-8 text-center animate-in fade-in">
+            <div class="w-24 h-24 bg-blue-500 rounded-3xl mb-6 flex items-center justify-center text-5xl shadow-lg ring-4 ring-blue-400">💧</div>
+            <h2 class="text-white text-3xl font-black mb-4">时间到！奖励就绪</h2>
+            <p id="reward-text" class="text-gray-400 mb-8">获得道具奖励</p>
+<div class="space-y-8 w-full"> 
+  <button onclick="" 
+      class="bg-blue-600 text-white text-lg font-bold px-8 py-4 rounded-full shadow-[0_6px_0_#1e40af] active:translate-y-1 active:shadow-none transition-all w-full animate-bounce">
+      进入倒水大师小游戏查看好友排名 👉
+  </button>
+
+
+  <button onclick="closeAdWithReward()" 
+      class="bg-green-600 text-white text-lg font-bold px-8 py-4 rounded-full shadow-[0_6px_0_#10b981] active:translate-y-1 active:shadow-none transition-all w-full">
+      返回小游戏
+  </button>
+</div>
+
+        </div>
+    </div>
+
+    <script>
+        // --- 修复后的脚本引擎 ---
+        const sound = {
+            ctx: null,
+            isBgmPlaying: false,
+            init() {
+                try {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    if (!this.ctx && AudioContext) this.ctx = new AudioContext();
+                } catch (e) { console.warn("Audio Context init failed", e); }
+            },
+            // 添加背景音乐逻辑
+            startBGM() {
+                if (this.isBgmPlaying) return;
+                try {
+                    if (!this.ctx) this.init();
+                    if (!this.ctx) return;
+                    
+                    this.isBgmPlaying = true;
+                    if (this.ctx.state === 'suspended') this.ctx.resume().catch(()=>{});
+
+                    let step = 0;
+                    const tempo = 130;
+                    const noteLength = 60 / tempo / 4;
+                    
+                    const playBeat = () => {
+                        if (!this.isBgmPlaying) return;
+                        // 创建一个简单的旋律循环
+                        const osc = this.ctx.createOscillator();
+                        const gain = this.ctx.createGain();
+                        osc.type = 'square';
+                        
+                        // 简单的背景旋律
+                        const melody = [261.63, 196.00, 329.63, 261.63, 392.00, 349.23, 329.63, 293.66];
+                        osc.frequency.setValueAtTime(melody[step % melody.length], this.ctx.currentTime);
+                        
+                        // 音量要小，作为背景
+                        gain.gain.setValueAtTime(0.02, this.ctx.currentTime);
+                        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + noteLength);
+                        
+                        osc.connect(gain); 
+                        gain.connect(this.ctx.destination);
+                        
+                        osc.start(); 
+                        osc.stop(this.ctx.currentTime + noteLength);
+                        
+                        step++;
+                        setTimeout(playBeat, noteLength * 1000);
+                    };
+                    playBeat();
+                } catch(e) { console.log('BGM error ignored', e); }
+            },
+            play(type) {
+                try {
+                    if (!this.ctx) this.init();
+                    if (!this.ctx) return;
+                    if (this.ctx.state === 'suspended') this.ctx.resume().catch(()=>{});
+
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.connect(gain); gain.connect(this.ctx.destination);
+
+                    const now = this.ctx.currentTime;
+                    if (type === 'click') {
+                        osc.type = 'triangle';
+                        osc.frequency.setValueAtTime(880, now);
+                        osc.frequency.exponentialRampToValueAtTime(440, now + 0.05);
+                        gain.gain.setValueAtTime(0.1, now);
+                        osc.start(); osc.stop(now + 0.05);
+                    } else if (type === 'match') {
+                        osc.frequency.setValueAtTime(523.25, now);
+                        osc.frequency.exponentialRampToValueAtTime(1046.50, now + 0.2);
+                        gain.gain.setValueAtTime(0.1, now);
+                        osc.start(); osc.stop(now + 0.2);
+                    } else if (type === 'fail') {
+                        osc.frequency.setValueAtTime(300, now);
+                        osc.frequency.linearRampToValueAtTime(100, now + 0.3);
+                        gain.gain.setValueAtTime(0.1, now);
+                        osc.start(); osc.stop(now + 0.3);
+                    } else if (type === 'win') {
+                        // 胜利音效
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(523.25, now);
+                        osc.frequency.setValueAtTime(659.25, now + 0.1);
+                        osc.frequency.setValueAtTime(783.99, now + 0.2);
+                        osc.frequency.setValueAtTime(1046.50, now + 0.3);
+                        gain.gain.setValueAtTime(0.1, now);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+                        osc.start(); osc.stop(now + 0.5);
+                    }
+                } catch(e) { console.log('Sound error ignored'); }
+            }
+        };
+
+        // --- 核心变量 ---
+        const ICONS = ['🥕', '🔥', '🪵', '🧶', '🍀', '🌽', '🥛', '🌼', '🎈', '🪻', '🍦','🌸', '🍄'];
+        let tiles = [];
+        let dock = [];
+        let currentRewardType = '';
+
+        // --- 自适应缩放逻辑 (修复手机显示不全) ---
+        function autoResize() {
+            const container = document.getElementById('game-stage-container');
+            const board = document.getElementById('game-board');
+            if (!container || !board) return;
+
+            const cw = container.clientWidth;
+            const ch = container.clientHeight;
+            const bw = 360; 
+            const bh = 460; 
+
+            const scale = Math.min((cw / bw) * 0.95, (ch / bh) * 0.95);
+            board.style.transform = `scale(${scale})`;
+        }
+        window.addEventListener('resize', autoResize);
+
+        // --- 游戏流程 ---
+        function startGame() {
+            sound.init(); // 初始化音频
+            sound.play('click');
+            sound.startBGM(); // 开始播放BGM
+            
+            // 隐藏开始页
+            document.getElementById('start-screen').style.display = 'none';
+            
+            // 初始化
+            initGame();
+        }
+
+        function initGame() {
+            const board = document.getElementById('game-board');
+            board.innerHTML = '';
+            tiles = []; dock = [];
+            updateDock();
+            document.getElementById('modal-overlay').classList.add('hidden');
+            
+            // 42组 * 3 = 126个
+            let pool = [];
+            for(let i=0; i<42; i++) { 
+                const type = ICONS[i % ICONS.length];
+                pool.push(type, type, type);
+            }
+            pool.sort(() => Math.random() - 0.5);
+            
+            pool.forEach((type, i) => {
+                const tile = {
+                    id: i, type: type,
+                    x: Math.random() * (360 - 60) + 5,
+                    y: Math.random() * (460 - 60) + 5,
+                    layer: Math.floor(i / 6),
+                    status: 'board'
+                };
+                tiles.push(tile);
+                createTileElement(tile);
+            });
+            checkBlocking();
+            autoResize();
+        }
+
+        function createTileElement(tile) {
+            const el = document.createElement('div');
+            el.id = `tile-${tile.id}`;
+            el.className = 'tile absolute w-14 h-14 bg-[#fefce8] border-b-4 border-[#eab308] rounded-xl flex items-center justify-center text-3xl shadow-md select-none';
+            el.innerText = tile.type;
+            el.style.left = `${tile.x}px`;
+            el.style.top = `${tile.y}px`;
+            el.style.zIndex = tile.layer;
+            el.onclick = (e) => {
+                e.stopPropagation();
+                onTileClick(tile);
+            };
+            document.getElementById('game-board').appendChild(el);
+        }
+
+        function checkBlocking() {
+            tiles.forEach(t => {
+                if (t.status !== 'board') return;
+                const el = document.getElementById(`tile-${t.id}`);
+                const isBlocked = tiles.some(other => 
+                    other.status === 'board' && other.layer > t.layer && 
+                    Math.abs(other.x - t.x) < 48 && Math.abs(other.y - t.y) < 48
+                );
+                if (isBlocked) el.classList.add('blocked');
+                else el.classList.remove('blocked');
+            });
+        }
+
+        function onTileClick(tile) {
+            const el = document.getElementById(`tile-${tile.id}`);
+            if (el.classList.contains('blocked') || dock.length >= 7) return;
+            
+            sound.play('click');
+            
+            tile.status = 'dock';
+            dock.push(tile);
+            el.remove();
+            
+            dock.sort((a, b) => a.type.localeCompare(b.type)); 
+            updateDock();
+            checkBlocking();
+
+            const counts = {};
+            dock.forEach(item => counts[item.type] = (counts[item.type] || 0) + 1);
+            const match = Object.keys(counts).find(k => counts[k] >= 3);
+
+            if (match) {
+                setTimeout(() => {
+                    sound.play('match');
+                    dock = dock.filter(item => item.type !== match);
+                    updateDock();
+                    
+                    // 检查胜利
+                    if (tiles.every(t => t.status !== 'board') && dock.length === 0) {
+                        sound.play('win');
+                        showModal('🎉 恭喜通关！', '太强了！你是羊神转世吧！', false, true);
+                    }
+                }, 200);
+            } else {
+                if (dock.length >= 7) {
+                    showModal('⌛ 寄了', '看广告，羊神附体复活？', true);
+                    setTimeout(() => sound.play('fail'), 100);
+                }
+            }
+        }
+
+        function updateDock() {
+            const dockEl = document.getElementById('dock');
+            dockEl.innerHTML = '';
+            dock.forEach(t => {
+                const item = document.createElement('div');
+                item.className = 'w-11 h-11 bg-[#fefce8] border-b-2 border-[#eab308] rounded flex items-center justify-center text-2xl shadow-sm animate-[bounce_0.3s]';
+                item.innerText = t.type;
+                dockEl.appendChild(item);
+            });
+        }
+
+        function showModal(title, sub, canRevive = false, isWin = false) {
+            const overlay = document.getElementById('modal-overlay');
+            const content = document.getElementById('modal-content');
+            
+            overlay.classList.remove('hidden');
+            
+            let icon = isWin ? '🏆' : '🐑';
+            let btnClass = isWin ? 'bg-yellow-500 shadow-[0_4px_0_#b45309]' : 'bg-red-600 shadow-[0_4px_0_#991b1b]';
+
+            content.innerHTML = `
+                <div class="text-6xl mb-4 animate-bounce">${icon}</div>
+                <h2 class="text-3xl font-black mb-2 text-gray-800">${title}</h2>
+                <p class="text-gray-500 mb-8 font-bold">${sub}</p>
+                ${canRevive ? `<button onclick="startAdGame('revive')" class="w-full ${btnClass} text-white py-4 rounded-xl font-bold mb-4 active:scale-95 transition-transform">消耗广告复活</button>` : ''}
+                <button onclick="restartGame()" class="w-full bg-gray-600 text-white py-4 rounded-xl font-bold shadow-lg opacity-80 active:scale-95 transition-transform">${isWin ? '再来一局' : '重开一局'}</button>
+            `;
+        }
+        
+        function restartGame() {
+             sound.play('click');
+             initGame();
+        }
+
+        function shareGame() {
+            sound.play('click');
+            const text = "已复制地狱难度邀请码：LAMB-777-SSS\n快发给朋友圈看看谁能过第二关！";
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(() => alert(text)).catch(() => alert(text));
+            } else {
+                const ta = document.createElement("textarea");
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand("copy");
+                document.body.removeChild(ta);
+                alert(text);
+            }
+        }
+
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(e=>{});
+            } else {
+                document.exitFullscreen().catch(e=>{});
+            }
+        }
+
+// --- 广告与倒水逻辑 ---
+      let adTimer, adSec = 30, selectedTube = null;
+      let waterGameWon = false; 
+      let waterWinAtSec = 0; // 记录第几秒通关
+      // 把重复的这一行删掉
+      
+      // 是否已通关（只触发一次）
+      const WATER_COLORS = ['#ef4444', '#3b82f6', '#eab308', '#22c55e', '#a855f7'];
+
+        function startAdGame(type) {
+            sound.play('click');
+            currentRewardType = type; adSec = 30;
+            waterGameWon = false; 
+            document.getElementById('ad-layer').classList.remove('hidden');
+            document.getElementById('ad-cta').classList.add('hidden');
+            document.getElementById('ad-status').innerText = "挑战中：分类所有液体以准备领取奖励";
+waterGameWon = false;
+waterWinAtSec = 0;
+document.getElementById('water-win-toast').classList.add('hidden');
+
+            
+            let rewardMsg = "获得奖励";
+            if (type === 'shuffle') rewardMsg = '奖励：全场随机洗牌';
+            if (type === 'revive') rewardMsg = '奖励：清空卡槽复活';
+            if (type === 'remove') rewardMsg = '奖励：移出卡槽前3张';
+            document.getElementById('reward-text').innerText = rewardMsg;
+
+            const timerEl = document.getElementById('ad-timer');
+            timerEl.innerText = `${adSec}s`;
+            
+            if (adTimer) clearInterval(adTimer);
+            adTimer = setInterval(() => {
+                adSec--;
+                timerEl.innerText = `${adSec}s`;
+                if(adSec <= 0) {
+                    clearInterval(adTimer);
+                    document.getElementById('ad-cta').classList.remove('hidden');
+                }
+            }, 1000);
+            initWaterGame();
+        }
+
+        let waterData = [];
+        function initWaterGame() {
+            const container = document.getElementById('water-game-container');
+            container.innerHTML = '';
+            waterData = [];
+            const allColors = [];
+            WATER_COLORS.forEach(c => allColors.push(c, c, c, c));
+            allColors.sort(() => Math.random() - 0.5);
+            for(let i=0; i<5; i++) waterData.push({ colors: allColors.slice(i*4, (i+1)*4) });
+            waterData.push({ colors: [] }, { colors: [] });
+            waterData.forEach((d, idx) => {
+                const tube = document.createElement('div');
+                tube.className = 'tube';
+                tube.id = `tube-${idx}`;
+                tube.onclick = () => handleWaterClick(idx);
+                renderTubeContent(tube, d.colors);
+                container.appendChild(tube);
+            });
+        }
+
+        function renderTubeContent(el, colors) {
+            el.innerHTML = '';
+            colors.forEach(c => {
+                const div = document.createElement('div');
+                div.className = 'water-layer'; div.style.backgroundColor = c;
+                el.appendChild(div);
+            });
+        }
+
+function checkAllSorted() {
+            return waterData.every(tube => {
+                // 如果瓶子是空的，或者是满的且颜色一致，则视为该瓶子已整理好
+                if (tube.colors.length === 0) return true;
+                if (tube.colors.length < 4) return false;
+                return tube.colors.every(c => c === tube.colors[0]);
+            });
+        }
+
+    function handleWaterClick(idx) {
+            if (adSec <= 0) return;
+            if (waterGameWon) return; // 锁定操作
+
+            const tubeEl = document.getElementById(`tube-${idx}`);
+            
+            // 1. 选中逻辑
+            if (selectedTube === null) {
+                if (waterData[idx].colors.length > 0) {
+                    selectedTube = idx;
+                    tubeEl.classList.add('selected');
+                    sound.play('click');
+                }
+            } 
+            // 2. 倒水逻辑
+            else {
+                const from = waterData[selectedTube];
+                const to = waterData[idx];
+                
+                // 如果点的是同一个瓶子，或者源瓶子空了，取消选中
+                if (selectedTube === idx || from.colors.length === 0) {
+                     document.getElementById(`tube-${selectedTube}`).classList.remove('selected');
+                     selectedTube = null;
+                     return;
+                }
+
+                const color = from.colors[from.colors.length - 1];
+                
+                // 核心规则：目标瓶不满，且目标瓶为空或最上层颜色相同
+                if (to.colors.length < 4 && (to.colors.length === 0 || to.colors[to.colors.length-1] === color)) {
+                    to.colors.push(from.colors.pop());
+                    
+                    // 更新视图
+                    renderTubeContent(document.getElementById(`tube-${selectedTube}`), from.colors);
+                    renderTubeContent(tubeEl, to.colors);
+                    sound.play('click'); 
+
+                    // --- 检查是否胜利 ---
+                    if (checkAllSorted()) {
+                        waterGameWon = true;
+                        sound.play('win');
+                        clearInterval(adTimer); // 停止倒计时
+
+			document.getElementById('click_btn').classList.add('hidden');
+                        // 隐藏倒水游戏区，显示你要求的“超过98%”界面
+                        const gameContainer = document.getElementById('water-game-container');
+                        gameContainer.innerHTML = `
+                            <div class="flex flex-col items-center animate-pop-in text-center p-4">
+                                <div class="text-6xl mb-4">🏆</div>
+                                <h2 class="text-white text-3xl font-black mb-2">恭喜通关！</h2>
+                                <p class="text-[#fbbf24] text-xl font-bold mb-8">
+                                    太强了！你超过了 <span class="text-3xl text-red-500">98%</span> 的用户
+                                </p>
+                                <div class="space-y-8 w-full"> 
+  <button onclick="" 
+      class="bg-blue-600 text-white text-lg font-bold px-8 py-4 rounded-full shadow-[0_6px_0_#1e40af] active:translate-y-1 active:shadow-none transition-all w-full animate-bounce">
+      进入倒水大师小游戏查看好友排名 👉
+  </button>
+
+  <button onclick="closeAdWithReward()" 
+      class="bg-green-600 text-white text-lg font-bold px-8 py-4 rounded-full shadow-[0_6px_0_#10b981] active:translate-y-1 active:shadow-none transition-all w-full">
+      返回小游戏
+  </button>
+</div>
+                            </div>
+                        `;
+                        // 隐藏原本的状态文字
+                        document.getElementById('ad-status').style.display = 'none';
+                    }
+                }
+                
+                // 取消选中样式
+                const prevEl = document.getElementById(`tube-${selectedTube}`);
+                if(prevEl) prevEl.classList.remove('selected');
+                selectedTube = null;
+            }
+        }
+
+        // --- 点击那个按钮后触发奖励界面 ---
+        function triggerReward() {
+            document.getElementById('water-game-container').innerHTML = ''; // 清空
+            document.getElementById('ad-cta').classList.remove('hidden'); // 显示“奖励就绪”层
+        }
+
+        function closeAdWithReward() {
+            sound.play('click');
+            document.getElementById('ad-layer').classList.add('hidden');
+            document.getElementById('modal-overlay').classList.add('hidden');
+            
+            if (currentRewardType === 'shuffle') {
+                const boardTiles = tiles.filter(t => t.status === 'board');
+                const pos = boardTiles.map(t => ({x: t.x, y: t.y, layer: t.layer}));
+                pos.sort(() => Math.random() - 0.5);
+                boardTiles.forEach((t, i) => {
+                    t.x = pos[i].x; t.y = pos[i].y; t.layer = pos[i].layer;
+                    const el = document.getElementById(`tile-${t.id}`);
+                    el.style.left = `${t.x}px`; el.style.top = `${t.y}px`; el.style.zIndex = t.layer;
+                });
+            } else if (currentRewardType === 'revive') {
+                dock = []; updateDock();
+            } else if (currentRewardType === 'remove' && dock.length > 0) {
+                const removeCount = Math.min(dock.length, 3);
+                const removed = dock.splice(0, removeCount);
+                updateDock();
+            }
+            checkBlocking();
+        }
+
+
+        window.onload = function() {
+            autoResize();
+        };
+    </script>
+</body>
+</html>
